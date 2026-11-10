@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Task 1 – QA Report – Saravana</title>
+<style>
+  @page { size: A4; margin: 14mm 12mm; }
+  body { font: 10.5pt/1.45 "Segoe UI", Roboto, Arial, sans-serif; color: #1d2330; }
+  h1 { font-size: 19pt; margin: 0 0 2px; } h2 { font-size: 13pt; margin: 18px 0 6px; border-bottom: 2px solid #e3e7ef; padding-bottom: 3px; }
+  .sub { color: #5b6475; margin-bottom: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 8.6pt; }
+  th, td { border: 1px solid #cfd5e1; padding: 4px 5px; vertical-align: top; text-align: left; }
+  th { background: #eef1f7; }
+  .sev { font-weight: 700; white-space: nowrap; }
+  .Critical { color: #b00020; } .High { color: #c2410c; } .Medium { color: #a16207; } .Low { color: #2563eb; }
+  code, pre { font-family: Consolas, "DejaVu Sans Mono", monospace; font-size: 8.4pt; }
+  pre { background: #f5f7fb; border: 1px solid #e3e7ef; padding: 6px 8px; white-space: pre-wrap; word-break: break-all; margin: 4px 0; }
+  .shots { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; } .shots figure { margin: 0; } .shots img { width: 100%; border: 1px solid #cfd5e1; }
+  figcaption { font-size: 8pt; color: #5b6475; }
+  .ok li { margin: 2px 0; } .page-break { page-break-before: always; }
+</style></head><body>
+<h1>Task 1 — Web App QA &amp; Debug Report</h1>
+<div class="sub">Candidate: Saravana · App under test: RealWorld “Conduit” official live demo — <code>https://demo.realworld.show</code> (Angular 21 frontend) + <code>https://api.realworld.show/api</code> · Tested 10 Nov 2026 · Tools: Chrome (Puppeteer-scripted flows), curl, DevTools network log</div>
+
+<h2>Summary for a non-technical stakeholder</h2>
+<p>The app's main flows work: you can sign up, log in, write, edit and delete articles, and log out. Under normal use it does not “break”. The “feels broken” reports come from <b>edge cases nobody guarded against</b>:</p>
+<ul>
+  <li>An article titled with only spaces is saved but can never be opened, edited or deleted again (Critical).</li>
+  <li>Weak passwords are accepted, and there is no limit on wrong login attempts (High).</li>
+  <li>Some error states show a blank page instead of a message.</li>
+  <li>Logging in fails if the email is typed with different capitalisation.</li>
+  <li>Screen-reader users get unlabeled form fields.</li>
+</ul>
+<p>None of these need a rewrite. Most are 1–10 line validation fixes on the server, plus small UI error states.</p>
+<p><i>Note: the PDF's suggested <code>demo.realworld.io</code> no longer exists (it returns S3 “NoSuchBucket”). The project moved its official demo to <code>demo.realworld.show</code>, which is what I tested. That demo isolates sessions per browser, so an account created via curl cannot log in from the browser. I ran browser flows and API probes as separate sessions.</i></p>
+
+<h2>Bug table</h2>
+<table>
+<tr><th>#</th><th>Title / Summary</th><th>Steps to Reproduce</th><th>Expected vs Actual</th><th>Severity</th><th>Suspected Cause</th></tr>
+<tr><td>1</td><td>Whitespace-only title creates an article with an <b>empty slug</b>. The article is orphaned: it can't be opened, edited or deleted.</td><td>Log in → <code>POST /api/articles</code> with <code>{"title":"   ","description":"d","body":"b"}</code> (in the UI: type 3 spaces as the title).</td><td><b>Expected:</b> 422 “title can't be blank”.<br><b>Actual:</b> 201 Created, <code>"slug":""</code>. <code>GET /api/articles/</code> → 307/404, so the article is unreachable but still counts in the feed.</td><td class="sev Critical">Critical</td><td>“Required” check runs on the raw string (<code>"   "</code> is truthy). Slugify trims to “”, and nothing checks the slug is non-empty and unique.</td></tr>
+<tr><td>2</td><td>No password strength rule: a 1-character password is accepted.</td><td>/register → username, email, password <code>a</code> → Sign up.</td><td><b>Expected:</b> min. length (e.g. 8) with an inline message.<br><b>Actual:</b> account created, user logged in (screenshot A).</td><td class="sev High">High</td><td>Registration validator only checks presence, not length or strength. The frontend form has no <code>minlength</code> either.</td></tr>
+<tr><td>3</td><td>No brute-force protection on login.</td><td>Send 10 rapid <code>POST /api/users/login</code> with wrong passwords for one email.</td><td><b>Expected:</b> throttling (429) or temporary lockout after N failures.<br><b>Actual:</b> all 10 return 401 immediately, with no delay or lock.</td><td class="sev High">High</td><td>No rate-limit middleware or failed-attempt counter on the auth route.</td></tr>
+<tr><td>4</td><td>Non-existent article URL shows a <b>blank page</b>.</td><td>Open <code>/article/does-not-exist</code>.</td><td><b>Expected:</b> “Article not found” + link home.<br><b>Actual:</b> API returns 404, and the page renders only the header and footer, with no message (screenshot B).</td><td class="sev Medium">Medium</td><td>Article resolver/component has no error branch for the 404 observable. The error is swallowed and the template renders with <code>article = undefined</code>.</td></tr>
+<tr><td>5</td><td>Login email is case-sensitive.</td><td>Register <code>qb…@example.com</code> → log in with <code>QB…@EXAMPLE.COM</code> + correct password.</td><td><b>Expected:</b> login succeeds (emails are case-insensitive in practice).<br><b>Actual:</b> 401 <code>credentials invalid</code>.</td><td class="sev Medium">Medium</td><td>Email isn't normalised (<code>trim().toLowerCase()</code>) on register/login, and lookup is exact-match.</td></tr>
+<tr><td>6</td><td>Whitespace-only username accepted.</td><td><code>POST /api/users</code> with <code>"username":"   "</code>.</td><td><b>Expected:</b> 422.<br><b>Actual:</b> 201. The user exists with a blank display name, and their profile URL is <code>/profile/%20%20%20</code>.</td><td class="sev Medium">Medium</td><td>Same root cause as #1: presence check without trimming.</td></tr>
+<tr><td>7</td><td>Accessibility: form fields have no labels; images have no <code>alt</code>.</td><td>Inspect /login, /register, /editor; run a screen reader or axe.</td><td><b>Expected:</b> each input has a <code>&lt;label&gt;</code> or <code>aria-label</code>, and avatars have <code>alt</code>.<br><b>Actual:</b> placeholder-only inputs (placeholders disappear when typing). 4 <code>&lt;img&gt;</code> without alt on the home feed.</td><td class="sev Medium">Medium</td><td>Template uses placeholders as labels; avatar component omits alt.</td></tr>
+<tr><td>8</td><td>Slow first load and API latency.</td><td>Load home page cold (desktop, normal network); time <code>GET /api/articles?limit=10</code>.</td><td><b>Expected:</b> &lt; 2–3 s to usable; API &lt; 300–500 ms.<br><b>Actual:</b> 7.3–8.0 s to network-idle; API 0.5–2.0 s per call, <code>/tags</code> up to 1.7 s.</td><td class="sev Medium">Medium</td><td>Cold or under-provisioned backend; no caching on read-only list endpoints; sequential requests on first paint.</td></tr>
+<tr><td>9</td><td>Submitting an empty login form gives no feedback.</td><td>/login → click “Sign in” with both fields empty.</td><td><b>Expected:</b> “Email is required” etc.<br><b>Actual:</b> nothing happens, with no message or focus change.</td><td class="sev Low">Low</td><td>Button disabled or validation errors not rendered for untouched fields.</td></tr>
+<tr><td>10</td><td>Validation error reported against the wrong field.</td><td><code>POST /api/articles</code> with a 5,000-char title.</td><td><b>Expected:</b> <code>{"errors":{"title":[…]}}</code>.<br><b>Actual:</b> <code>{"errors":{"body":["title is a string of less than 100 chars"]}}</code>, so the UI highlights the wrong field.</td><td class="sev Low">Low</td><td>Schema-validator errors are mapped to the request <i>body</i> key rather than the property path.</td></tr>
+<tr><td>11</td><td>Invalid pagination accepted silently.</td><td><code>GET /api/articles?limit=-1&amp;offset=-5</code></td><td><b>Expected:</b> 400.<br><b>Actual:</b> 200 with <code>articles: []</code> but <code>articlesCount: 4</code>, which is inconsistent.</td><td class="sev Low">Low</td><td>Query params are not range-validated.</td></tr>
+<tr><td>12</td><td>CORS reflects any Origin with credentials allowed.</td><td><code>curl -I -H "Origin: https://evil.example" …/api/articles</code></td><td><b>Expected:</b> allow-list of known frontends.<br><b>Actual:</b> <code>access-control-allow-origin: https://evil.example</code> + <code>allow-credentials: true</code>.</td><td class="sev Low">Low</td><td>CORS configured as <code>origin: true</code>. Lower risk here because auth is a header token, but it matters for the session cookie the demo uses.</td></tr>
+</table>
+
+<h2>What I checked that <u>passed</u></h2>
+<ul class="ok">
+  <li><b>XSS:</b> title <code>&lt;img src=x onerror=alert(1)&gt;</code> and body <code>&lt;script&gt;</code>, <code>[x](javascript:…)</code>, <code>&lt;img onerror&gt;</code> are all rendered escaped. No dialog fired and no <code>javascript:</code> links were present in the DOM (screenshot C).</li>
+  <li><b>Double submit:</b> three rapid clicks on “Publish Article” created exactly one article.</li>
+  <li><b>Auth guard:</b> <code>GET /api/articles/feed</code> without a token → 401 <code>token is missing</code>.</li>
+  <li><b>Email format:</b> invalid email rejected with 422. Mobile (375 px): no horizontal scroll.</li>
+</ul>
+
+<h2>Root-cause analysis — Bug #1 (whitespace title → orphaned article)</h2>
+<pre>POST /api/articles {"article":{"title":"   ","description":"d","body":"b"}}
+→ 201 {"article":{"slug":"","title":"   ",...}}
+GET  /api/articles/   → 307 redirect / 404 "article not found"</pre>
+<p><b>What happens:</b> the server's “title is required” check only tests that the field exists and is a non-empty string. Three spaces pass. The slug generator then lower-cases the title, replaces non-alphanumerics with hyphens and trims leading/trailing hyphens, so <code>"   "</code> becomes <code>""</code>.</p>
+<p><b>Why it breaks:</b> every article route (<code>GET/PUT/DELETE /articles/:slug</code>) is keyed by slug, and an empty path segment never matches <code>:slug</code>. The router redirects or 404s, so the author cannot view, edit or delete the record, yet it still appears in list counts. Titles made only of emoji or punctuation (e.g. <code>"!!!"</code>) hit the same path. A second empty-slug article would also collide, because slug uniqueness is never checked.</p>
+<p><b>Fix:</b></p>
+<ol>
+  <li>Normalise input: <code>title = title.trim()</code>, and reject when it's empty (422 <code>{"title":["can't be blank"]}</code>). Apply the same rule to username, description and body.</li>
+  <li>After slugify, if the slug is empty, fall back to a generated id (<code>article-&lt;shortid&gt;</code>). Always append a short random suffix on collision.</li>
+  <li>Add a DB constraint: <code>slug</code> NOT NULL, length &gt; 0, UNIQUE.</li>
+  <li>Mirror the trim/required rule in the Angular form (<code>Validators.pattern(/\S/)</code>) for instant feedback.</li>
+  <li>Add a regression test: POST with <code>"   "</code> → 422; POST with <code>"!!!"</code> → 201 with a non-empty slug.</li>
+  <li>Run a one-off cleanup query for existing rows where <code>slug = ''</code>.</li>
+</ol>
+
+<h2 class="page-break">Evidence</h2>
+<div class="shots">
+  <figure><img src="screenshots/02-register-weak-password.png"><figcaption>A — Sign-up with password “a” (accepted, bug #2)</figcaption></figure>
+  <figure><img src="screenshots/04-missing-article.png"><figcaption>B — /article/&lt;missing&gt;: blank page, no message (bug #4)</figcaption></figure>
+  <figure><img src="screenshots/03-xss-article.png"><figcaption>C — XSS payloads rendered as text (passed)</figcaption></figure>
+  <figure><img src="screenshots/05-mobile.png" style="max-height:330px;width:auto"><figcaption>D — Mobile 375 px, no horizontal scroll (passed)</figcaption></figure>
+</div>
+<p style="font-size:8.6pt;color:#5b6475">Repro scripts (curl and Puppeteer) are in the GitHub repo under <code>qa/</code>. All test data used throwaway <code>@example.com</code> accounts on the public demo.</p>
+</body></html>

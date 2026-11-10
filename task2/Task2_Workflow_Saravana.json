@@ -1,0 +1,415 @@
+{
+  "name": "Task2 – HackerNews Morning Brief",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "name": "Every hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "a99f8cd6-601d-45e1-ac0a-eb7d70bc1336"
+    },
+    {
+      "parameters": {
+        "path": "morning-brief",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "name": "Webhook (manual run)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        200
+      ],
+      "webhookId": "a6d0c3f2-4b1e-4c7a-9a55-1f2f0b7d9e01",
+      "id": "80ffe822-f92b-43c9-b9f5-0db8da069bbe"
+    },
+    {
+      "parameters": {
+        "url": "https://hn.algolia.com/api/v1/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "tags",
+              "value": "front_page"
+            },
+            {
+              "name": "hitsPerPage",
+              "value": "30"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "name": "HN front page (API 1)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput",
+      "id": "54f34860-c594-408e-a1db-a4e4602acde2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Keep only the 5 highest-scoring stories, reshaped to the fields we need.\nconst hits = $input.first().json.hits || [];\nif (!hits.length) throw new Error('HN API returned no stories');\nreturn hits\n  .filter(h => h.title)\n  .sort((a, b) => (b.points || 0) - (a.points || 0))\n  .slice(0, 5)\n  .map((h, i) => ({ json: {\n    rank: i + 1, id: h.objectID, title: h.title,\n    url: h.url || 'https://news.ycombinator.com/item?id=' + h.objectID,\n    points: h.points || 0, comments: h.num_comments || 0, author: h.author,\n  }}));"
+      },
+      "name": "Top 5 by points",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ],
+      "id": "9a94309d-7ef9-46c3-b876-effce9d38ba3"
+    },
+    {
+      "parameters": {
+        "url": "={{ \"https://hacker-news.firebaseio.com/v0/item/\" + ($json.kids && $json.kids.length ? $json.kids[0] : $json.id) + \".json\" }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "name": "Top story details (API 2)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput",
+      "id": "7c455bc5-a02f-49c2-bb48-77307d9fdcc5"
+    },
+    {
+      "parameters": {
+        "url": "=https://hacker-news.firebaseio.com/v0/item/{{ $(\"Top 5 by points\").first().json.id }}.json",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "name": "Fetch #1 story item",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput",
+      "executeOnce": true,
+      "id": "7b389315-5d9e-468b-972a-f7881c3e8ed7"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine the top 5 with the enrichment (top comment of the #1 story).\nconst top = $('Top 5 by points').all().map(i => i.json);\nconst c = $input.first().json || {};\nconst decode = s => s.replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16))).replace(/&#(\\d+);/g, (_, d) => String.fromCodePoint(+d)).replace(/&quot;/g, '\"').replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');\nconst strip = s => decode(String(s || '').replace(/<p>/g, ' ').replace(/<[^>]+>/g, ' ')).replace(/\\s+/g, ' ').trim();\nconst esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst topComment = strip(c.text).slice(0, 280);\nconst lines = top.map(s => `${s.rank}. <a href=\"${esc(s.url)}\">${esc(s.title)}</a> — ${s.points} pts, ${s.comments} comments`);\nreturn [{ json: {\n  topPoints: top[0].points,\n  topTitle: top[0].title,\n  digest: lines.join('\\n'),\n  topComment: topComment ? esc(topComment) + (c.by ? ' — <i>' + esc(c.by) + '</i>' : '') : '(no comments yet)',\n}}];"
+      },
+      "name": "Build digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ],
+      "id": "a19558c1-08f3-48d7-a317-bea6a2bdeacd"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Is #1 story hot? (points > 300)",
+              "leftValue": "={{ $json.topPoints }}",
+              "rightValue": 300,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Is #1 story hot? (points > 300)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1440,
+        0
+      ],
+      "id": "9e4af6fc-5c20-4baf-a236-26fe32c49438"
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "=🔥 <b>HN Morning Brief — hot day</b>\n#1 has {{ $json.topPoints }} points\n\n{{ $json.digest }}\n\n💬 Top comment on #1:\n{{ $json.topComment }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "appendAttribution": false
+        }
+      },
+      "name": "Telegram: HOT brief",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1680,
+        -100
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "Sf78C4QMFKk1sQKR",
+          "name": "Telegram – Oytra brief bot"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "id": "85b3526c-71bb-4162-b2da-598160f6492b",
+      "webhookId": "c16daef6-4482-4a8b-b860-cae9e7eb69df"
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "=📰 <b>HN Morning Brief</b>\n\n{{ $json.digest }}\n\n💬 Top comment on #1:\n{{ $json.topComment }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "appendAttribution": false
+        }
+      },
+      "name": "Telegram: normal brief",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1680,
+        100
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "Sf78C4QMFKk1sQKR",
+          "name": "Telegram – Oytra brief bot"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "id": "79b0f7c7-d3f5-48f2-a12c-30c38759f7f8",
+      "webhookId": "56621e71-d65e-45c2-97ee-67c4ee6ac7c1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Any failed API call lands here instead of crashing silently.\nconst e = $input.first().json.error || $input.first().json;\nconst msg = typeof e === 'string' ? e : (e.message || JSON.stringify(e)).slice(0, 300);\nreturn [{ json: { alert: '⚠️ Morning Brief: an API call failed, sending fallback.\\n' + msg + '\\nTime: ' + $now.toISO() } }];"
+      },
+      "name": "Format API error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        300
+      ],
+      "id": "3b97f9d0-9c7e-4b3a-a41f-d244efe68c16"
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $json.alert }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "appendAttribution": false
+        }
+      },
+      "name": "Telegram: error fallback",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1200,
+        300
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "Sf78C4QMFKk1sQKR",
+          "name": "Telegram – Oytra brief bot"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "id": "2d89919a-a603-4f9a-9a20-ba0ae523de3b",
+      "webhookId": "cc1643fe-bf67-4276-add4-e9f11586e974"
+    }
+  ],
+  "connections": {
+    "Every hour": {
+      "main": [
+        [
+          {
+            "node": "HN front page (API 1)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook (manual run)": {
+      "main": [
+        [
+          {
+            "node": "HN front page (API 1)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HN front page (API 1)": {
+      "main": [
+        [
+          {
+            "node": "Top 5 by points",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format API error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Top 5 by points": {
+      "main": [
+        [
+          {
+            "node": "Fetch #1 story item",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch #1 story item": {
+      "main": [
+        [
+          {
+            "node": "Top story details (API 2)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format API error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Top story details (API 2)": {
+      "main": [
+        [
+          {
+            "node": "Build digest",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format API error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build digest": {
+      "main": [
+        [
+          {
+            "node": "Is #1 story hot? (points > 300)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is #1 story hot? (points > 300)": {
+      "main": [
+        [
+          {
+            "node": "Telegram: HOT brief",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram: normal brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format API error": {
+      "main": [
+        [
+          {
+            "node": "Telegram: error fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "errorWorkflow": "RqFJQeI8pF0XwTXL",
+    "timezone": "Asia/Kolkata"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

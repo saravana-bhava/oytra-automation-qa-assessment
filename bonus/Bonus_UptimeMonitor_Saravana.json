@@ -1,0 +1,311 @@
+{
+  "name": "Bonus – Uptime Monitor (demo.realworld.show)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "name": "Every 5 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "0612c833-e985-49d1-8fbb-4f37ec033b2a"
+    },
+    {
+      "parameters": {
+        "jsCode": "// GET the app up to 3 times; record status + response time of the final attempt.\nconst url = 'https://demo.realworld.show/';\nlet status = 0, ms = 0, error = null;\nfor (let attempt = 1; attempt <= 3; attempt++) {\n  const t0 = Date.now();\n  try {\n    const res = await this.helpers.httpRequest({ method: 'GET', url, returnFullResponse: true, ignoreHttpStatusErrors: true, timeout: 10000 });\n    status = res.statusCode; error = null;\n  } catch (e) { status = 0; error = e.message; }\n  ms = Date.now() - t0;\n  if (status === 200) break;\n  await new Promise(r => setTimeout(r, 3000));\n}\n// keep history for the daily summary (persists while the workflow is active)\nconst store = $getWorkflowStaticData('global');\nstore.checks = (store.checks || []).concat({ t: Date.now(), status, ms }).slice(-400);\nreturn [{ json: { url, status, ms, error, checkedAt: new Date().toISOString(), slow: ms > 3000 } }];"
+      },
+      "name": "Ping with retries + timing",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "id": "a3fedc6c-eafc-477a-b7e2-31ae256310d9"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Status is not 200?",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": 200,
+              "operator": {
+                "type": "number",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Status is not 200?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        0
+      ],
+      "id": "b9b70f29-ad32-4077-8b26-ec53fe95d683"
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "=🚨 <b>{{ $json.url }} is DOWN</b>\nStatus: {{ $json.status || \"no response\" }} after 3 attempts\nResponse time: {{ $json.ms }} ms\n{{ $json.error ? \"Error: \" + $json.error : \"\" }}\nChecked: {{ $json.checkedAt }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "appendAttribution": false
+        }
+      },
+      "name": "Telegram: DOWN alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        720,
+        -100
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "Sf78C4QMFKk1sQKR",
+          "name": "Telegram – Oytra brief bot"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "id": "0492a4df-8f26-48ec-aadb-e67da0b02d6c",
+      "webhookId": "7a4b90e1-9fd5-46bf-9791-a288ee9354d2"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Slow? (> 3000 ms)",
+              "leftValue": "={{ $json.ms }}",
+              "rightValue": 3000,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Slow? (> 3000 ms)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        100
+      ],
+      "id": "fbba0f16-70b4-444f-b9ba-8a400ec833a8"
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "=🐢 {{ $json.url }} is up but slow: {{ $json.ms }} ms ({{ $json.checkedAt }})",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "appendAttribution": false
+        }
+      },
+      "name": "Telegram: SLOW warning",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        960,
+        100
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "Sf78C4QMFKk1sQKR",
+          "name": "Telegram – Oytra brief bot"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "id": "7fcef6ec-9bd5-4cab-9f9f-dcf9c82790ec",
+      "webhookId": "0f65c7fb-d012-4a30-8368-8643e2ceafb8"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "name": "Daily 09:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        400
+      ],
+      "id": "6940758b-47d9-43a8-8e58-6d1264d96531"
+    },
+    {
+      "parameters": {
+        "jsCode": "const store = $getWorkflowStaticData('global');\nconst since = Date.now() - 24 * 3600 * 1000;\nconst c = (store.checks || []).filter(x => x.t >= since);\nif (!c.length) return [{ json: { text: '📊 Uptime summary: no checks recorded in the last 24h.' } }];\nconst up = c.filter(x => x.status === 200);\nconst avg = Math.round(c.reduce((s, x) => s + x.ms, 0) / c.length);\nconst max = Math.max(...c.map(x => x.ms));\nreturn [{ json: { text: `📊 <b>Uptime summary (24h)</b> — https://demo.realworld.show/\\nChecks: ${c.length}\\nUptime: ${(up.length / c.length * 100).toFixed(2)}%\\nAvg response: ${avg} ms, worst: ${max} ms\\nFailures: ${c.length - up.length}` } }];"
+      },
+      "name": "Daily summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        400
+      ],
+      "id": "6518dc39-fe56-48ec-bd7d-111b4ca0fb4e"
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "appendAttribution": false
+        }
+      },
+      "name": "Telegram: daily summary",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        480,
+        400
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "Sf78C4QMFKk1sQKR",
+          "name": "Telegram – Oytra brief bot"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "id": "bc3326bb-0b5c-4b07-ac77-94a4e0b18079",
+      "webhookId": "4c482758-8747-44aa-8bb6-2192e954e065"
+    }
+  ],
+  "connections": {
+    "Every 5 minutes": {
+      "main": [
+        [
+          {
+            "node": "Ping with retries + timing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ping with retries + timing": {
+      "main": [
+        [
+          {
+            "node": "Status is not 200?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Status is not 200?": {
+      "main": [
+        [
+          {
+            "node": "Telegram: DOWN alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slow? (> 3000 ms)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slow? (> 3000 ms)": {
+      "main": [
+        [
+          {
+            "node": "Telegram: SLOW warning",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily 09:00": {
+      "main": [
+        [
+          {
+            "node": "Daily summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily summary": {
+      "main": [
+        [
+          {
+            "node": "Telegram: daily summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "errorWorkflow": "RqFJQeI8pF0XwTXL",
+    "timezone": "Asia/Kolkata"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}
